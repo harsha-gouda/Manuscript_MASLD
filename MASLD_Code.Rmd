@@ -1,0 +1,198 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.show = 'hide')
+setwd("C:/Users/XXX")
+library(tidyverse)
+library(mixOmics)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(vegan)
+library(tibble)
+library(CoDaSeq)
+library(dplyr)
+```
+
+```{r data_import}
+#read_file
+feature_table <- read_csv("featuretable_reformated.csv")
+library_matches <- read_tsv("merged_results_with_gnps_all.tsv")
+metadata <- read_csv("metadata.csv") %>% arrange(filename)
+
+#data_transpose
+data_transpose <- feature_table %>% 
+  column_to_rownames("row ID") %>% 
+  dplyr::select(contains(".mzML")) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("filename")
+
+
+#remove Peak area from filename from feature table
+data_transpose$filename <- gsub("Peak area", "", data_transpose$filename)
+data_transpose <- data_transpose %>% arrange(filename)
+
+#rclr normalisation
+data_clr <- codaSeq.clr(column_to_rownames(data_transpose, var = "filename")+ 1) %>% as.data.frame() 
+clr_data <- data_clr %>%  rownames_to_column("filename") %>% arrange(filename)
+clr_data$filename <- trimws(clr_data$filename)
+
+#filter metadata
+m_filter <- metadata %>%
+  filter(str_detect(filename, "P")) %>%
+  filter(str_detect(ATTRIBUTE_visit_code, "W12|W24"))
+
+#TIC normalization
+Sample_tic <- column_to_rownames(data_transpose, var = "filename")
+Sample_tic <- Sample_tic + 1
+Sample_tic <- sweep(Sample_tic, 1, rowSums(Sample_tic), FUN = "/")
+Sample_tic <- Sample_tic * 1e+3
+Sample_tic <- as.data.frame(Sample_tic)
+Sample_tic <- Sample_tic %>% rownames_to_column("filename") %>% arrange(filename)
+Sample_tic$filename <- trimws(Sample_tic$filename)
+
+
+#filter_data
+filter_data <- clr_data %>%
+  filter(filename %in% m_filter$filename) 
+```
+
+```{r PCA}
+#PCA analysis#
+PCA_whole <- mixOmics::pca(filter_data, ncomp = 4, scale = TRUE)
+PCA_whole_scores <- data.frame(PCA_whole$variates$X, m_filter)
+PCA_plot <- PCA_whole_scores %>%
+  ggscatter(x = "PC1", y = "PC2", color = "ATTRIBUTE_visit_code", alpha = 1, size = 2,
+            title = paste("PCA", "Plasma", sep = " "),
+            xlab = paste("PC1 (", round(PCA_whole$prop_expl_var$X[1]*100, digits = 2),"%)", sep = ""), 
+            ylab = paste("PC2 (", round(PCA_whole$prop_expl_var$X[2]*100, digits = 2),"%)", sep = ""),
+            ggtheme = theme_bw()) +
+  stat_ellipse(aes(colour = ATTRIBUTE_visit_code), alpha = 1) + 
+  geom_point(
+    data = PCA_whole_scores %>% 
+      group_by(ATTRIBUTE_visit_code) %>% 
+      summarise(across(matches("PC"), mean)),  # Calculate mean PC1 and PC2
+    aes(PC1, PC2, color = ATTRIBUTE_visit_code), 
+    size = 4, 
+    shape = 8  # Star-shaped marker for centroids
+  ) +
+  theme(plot.title = element_text(size = 20, colour = "black"),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 20, face = "bold"),
+        panel.border = element_rect(color = "black", size = 1.5)) +  # Adjust border color and thickness here
+  coord_fixed()
+
+print(PCA_plot)
+#ggsave("PCA_Plasma_visit_code.tiff", plot = PCA_plot, dpi = 500, width = 8, height = 6)
+
+```
+
+```{r PLSDA}
+# Ensure the grouping variable is a factor
+PCA_whole_scores$ATTRIBUTE_visit_code <- as.factor(PCA_whole_scores$ATTRIBUTE_visit_code)
+filter_data <- filter_data %>% column_to_rownames("filename")%>% dplyr::select(where(is.numeric))
+#PLS_DA
+PLSDA_whole <- mixOmics::plsda(filter_data,PCA_whole_scores$ATTRIBUTE_visit_code, ncomp = 5, scale = TRUE)
+PLSDA_whole_scores <- data.frame(PLSDA_whole$variates$X) %>% 
+  rownames_to_column("filename") 
+PLSDA_whole_scores$filename <- trimws(PLSDA_whole_scores$filename)
+PLSDA_whole_scores <- PLSDA_whole_scores %>%
+  left_join(m_filter, by = "filename")
+
+
+PLSDA_incubation_time <- PLSDA_whole_scores %>%
+  ggscatter(
+    x = "comp1", 
+    y = "comp2", 
+    color = "ATTRIBUTE_visit_code", 
+    alpha = 1,
+    size = 2.5,
+    title = "MASLD_Stool",
+    xlab = paste("Component 1 (", round(PLSDA_whole$prop_expl_var$X[1]*100, digits = 1),"%)", sep = ""), 
+    ylab = paste("Component 2 (", round(PLSDA_whole$prop_expl_var$X[2]*100, digits = 1),"%)", sep = ""),
+    legend.title = "Group", 
+    ggtheme = theme_bw()
+  ) +
+  stat_ellipse(
+    aes(color = ATTRIBUTE_visit_code),
+    alpha = 1,   # Adjust transparency of the ellipse
+    type = "t"     # Type "t" fits the ellipse to a t-distribution
+  ) +
+  geom_point(
+    data = PLSDA_whole_scores %>% 
+      group_by(ATTRIBUTE_visit_code) %>% 
+      summarise(across(matches("Comp"), mean)),  # Calculate mean PC1 and PC2
+    aes(comp1, comp2, color = ATTRIBUTE_visit_code), 
+    size = 4, 
+    shape = 8  # Star-shaped marker for centroids
+  ) +
+  scale_color_manual(
+    values = c("W12" = "#05f2d7", "W24" = "#f2d705", "Screening" = "red")  # Custom colors for W12 and W24
+  ) +
+  theme(
+    plot.title = element_text(size = 20, colour = "black"),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 20, face = "bold"),
+    panel.border = element_rect(color = "black", size = 1.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),# Adjust border color and thickness here
+  ) + 
+  coord_fixed()
+
+print(PLSDA_incubation_time)
+
+#ggsave("PLSDA_stool.png", plot = PLSDA_incubation_time,dpi = 500, width = 6, height = 4)
+```
+
+```{r Pearson correlation}
+df_merge <- m_filter %>% left_join(filter_data, by = "filename")
+
+df_correlation <- df_merge %>%
+  dplyr::select(-filename) %>%
+  summarise(across(
+    where(is.numeric), 
+    ~ cor.test(.x, df_merge$PDFF, method = "pearson") %>% 
+      broom::tidy(), 
+    .names = "{.col}"
+  )) %>%
+  tidyr::pivot_longer(cols = everything(), 
+                      names_to = "Metabolite", 
+                      values_to = "Correlation_Info") %>%
+  unnest_wider(Correlation_Info)
+
+significant_results <- df_correlation %>%
+  filter(p.value < 0.1) %>%
+  mutate(Direction = case_when(
+    estimate > 0 ~ "Positive",
+    estimate < 0 ~ "Negative"
+  ))
+
+annotation <- library_matches[,c(2,15)]
+significant_results <- merge(annotation, significant_results, by.x = "#Scan#", by.y = "Metabolite")
+significant_results$Compound_Name <- gsub("Spectral Match to", "", significant_results$Compound_Name)
+significant_results$Compound_Name <- gsub("MoNA:", "", significant_results$Compound_Name)
+significant_results$Compound_Name <- gsub("from NIST14", "", significant_results$Compound_Name)
+
+```
+
+```{r MK features}
+#Milk features
+MK_met <- data_transpose %>%
+  filter(str_detect(filename, "MK|YG"))
+average <- colMeans(MK_met[sapply(MK_met, is.numeric)])
+MK_met <- rbind(MK_met, c(filename = "Average", average))
+#Plasma features
+Plasma_met <- data_transpose %>%
+  filter(str_detect(filename, "P0"))
+average_plasma <- colMeans(Plasma_met[sapply(Plasma_met, is.numeric)])
+Plasma_met <- rbind(Plasma_met, c(filename = "Average_Plasma", average_plasma))
+#Ratio of Milk/plasma features
+Ratio_MK_to_plasma <- average/ average_plasma
+MK_met <- rbind(MK_met, c(filename = "Ratio_MK_to_Plasma", Ratio_MK_to_plasma))
+MK_ratio <- MK_met %>%
+  filter(str_detect(filename, "Ratio_MK_to_Plasma"))
+MK_ratio <- MK_ratio %>% column_to_rownames("filename") %>% t() %>% as.data.frame()
+MK_ratio <- MK_ratio %>% rownames_to_column("#Scan#")
+significant_results_MK <- merge(significant_results, MK_ratio, by.x = "#Scan#", by.y = "#Scan#")
+
+write.csv(significant_results_MK, "pearson_corr_with_PDFF_MK_ratio.csv", row.names = FALSE)
+```
