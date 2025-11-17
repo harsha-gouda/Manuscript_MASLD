@@ -139,8 +139,14 @@ PLSDA_incubation_time <- PLSDA_whole_scores %>%
   coord_fixed()
 
 print(PLSDA_incubation_time)
+ggsave("PLSDA_stool.png", plot = PLSDA_incubation_time,dpi = 500, width = 6, height = 4)
 
-#ggsave("PLSDA_stool.png", plot = PLSDA_incubation_time,dpi = 500, width = 6, height = 4)
+# Extract Classification error rate
+perf_plsda <- mixOmics::perf(PLSDA_whole, validation = "Mfold", folds = 20, 
+                              progressive = TRUE, auc = TRUE)
+
+cv_error <- perf_plsda$error.rate$overall %>% as.data.frame()
+print(cv_error$centroids.dist)
 ```
 
 ```{r Pearson correlation}
@@ -157,7 +163,8 @@ df_correlation <- df_merge %>%
   tidyr::pivot_longer(cols = everything(), 
                       names_to = "Metabolite", 
                       values_to = "Correlation_Info") %>%
-  unnest_wider(Correlation_Info)
+  unnest_wider(Correlation_Info)  %>%
+  mutate(p.adjust = p.adjust(p.value, method = "BH"))
 
 significant_results <- df_correlation %>%
   filter(p.value < 0.1) %>%
