@@ -30,16 +30,24 @@ data_transpose <- feature_table %>%
 #remove Peak area from filename from feature table
 data_transpose$filename <- gsub("Peak area", "", data_transpose$filename)
 data_transpose <- data_transpose %>% arrange(filename)
-
-#rclr normalisation
-data_clr <- codaSeq.clr(column_to_rownames(data_transpose, var = "filename")+ 1) %>% as.data.frame() 
-clr_data <- data_clr %>%  rownames_to_column("filename") %>% arrange(filename)
-clr_data$filename <- trimws(clr_data$filename)
+data_transpose$filename <- trimws(data_transpose$filename)
 
 #filter metadata
 m_filter <- metadata %>%
   filter(str_detect(filename, "P")) %>%
   filter(str_detect(ATTRIBUTE_visit_code, "W12|W24"))
+
+data_transpose <- data_transpose %>% filter(filename %in% m_filter$filename)
+
+# Remove near-zero variance features
+nzv_cols <- nearZeroVar(data_transpose)
+data_transpose <- data_transpose[, -nzv_cols]
+
+
+#rclr normalisation
+data_clr <- codaSeq.clr(column_to_rownames(data_transpose, var = "filename")+ 1) %>% as.data.frame() 
+clr_data <- data_clr %>%  rownames_to_column("filename") %>% arrange(filename)
+clr_data$filename <- trimws(clr_data$filename)
 
 #TIC normalization
 Sample_tic <- column_to_rownames(data_transpose, var = "filename")
@@ -53,7 +61,7 @@ Sample_tic$filename <- trimws(Sample_tic$filename)
 
 #filter_data
 filter_data <- clr_data %>%
-  filter(filename %in% m_filter$filename) 
+  filter(filename %in% m_filter$filename)
 ```
 
 ```{r PCA}
@@ -87,6 +95,7 @@ print(PCA_plot)
 ```
 
 ```{r PLSDA}
+filter_data <- clr_data %>% filter(filename %in% m_filter$filename)
 # Ensure the grouping variable is a factor
 PCA_whole_scores$ATTRIBUTE_visit_code <- as.factor(PCA_whole_scores$ATTRIBUTE_visit_code)
 filter_data <- filter_data %>% column_to_rownames("filename")%>% dplyr::select(where(is.numeric))
